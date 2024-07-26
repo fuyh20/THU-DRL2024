@@ -1,0 +1,41 @@
+defaults:
+  - _self_
+  - agent: ppo
+
+seeds: 
+- 0
+- 42
+- 3407 # https://arxiv.org/abs/2109.08203
+
+tag: null
+env_name: LunarLanderContinuous-v2
+vec_envs: 16
+
+train:
+  nstep: ${buffer.nstep}
+  vec_envs: ${vec_envs}
+  timesteps: 3_000_000
+  batch_size: 512
+  plot_interval: 20000
+  eval_interval: 20000
+  eval_episodes: 10
+  ppo_update_interval: ${buffer.capacity}
+
+buffer:
+  capacity: 16384
+  use_per: False
+  use_ppo: True
+  nstep: 1
+  gamma: ${agent.gamma}
+  per_alpha: 0.7
+  per_beta: 0.4
+  per_eps: 0.01
+  gae_lambda: 0.95
+  vec_envs: ${vec_envs}
+
+
+hydra:
+  job:
+    chdir: true
+  run:
+    dir: ./runs/${now:%Y-%m-%d}/${now:%H-%M-%S}_${hydra.job.override_dirname}

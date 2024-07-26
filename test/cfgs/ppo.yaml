@@ -1,0 +1,12 @@
+_target_: agent.ppo.PPOAgent
+nstep: 1
+hidden_dim: [300, 400]
+gamma: 0.99
+tau: 0.005
+lr: 3.0e-4
+clip_range: 0.2
+value_clip_range: null
+value_coef: 1
+entropy_coef: 0.01
+update_epochs: 10
+mini_batch_size: 512
