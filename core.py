@@ -1,10 +1,12 @@
+import random
 import logging
 import numpy as np
 from buffer import ReplayBuffer, PrioritizedReplayBuffer
 from copy import deepcopy
-from utils import merge_videos, visualize
+from utils import merge_videos, visualize, get_epsilon
 from gymnasium.wrappers import RecordVideo
 logger = logging.getLogger(__name__)
+
 
 def eval(env, agent, episodes, seed):
     returns = []
@@ -13,7 +15,7 @@ def eval(env, agent, episodes, seed):
         done, truncated = False, False
 
         while not (done or truncated):
-            state, _, done, truncated, info = env.step(agent.get_action(state))
+            state, _, done, truncated, info = env.step(agent.get_action(state).item())
         returns.append(info['episode']['r'].item())
     return np.mean(returns), np.std(returns)
 
@@ -32,7 +34,12 @@ def train(cfg, env, agent, buffer, seed, log_dict):
             log_dict['train_returns'][-1].append(info['episode']['r'].item())
             log_dict['train_steps'][-1].append(step - 1)
 
-        action = agent.get_action(state, sample=True)
+        eps = get_epsilon(step, cfg.eps_min, cfg.eps_max, cfg.eps_steps, cfg.warmup_steps)
+
+        if step < cfg.warmup_steps or random.random() < eps:
+            action = env.action_space.sample()
+        else:
+            action = agent.get_action(state).item()
 
         next_state, reward, done, truncated, info = env.step(action)
         buffer.add((state, action, reward, next_state, int(done)))
@@ -41,17 +48,17 @@ def train(cfg, env, agent, buffer, seed, log_dict):
         if step > cfg.batch_size + cfg.nstep:
             if isinstance(buffer, PrioritizedReplayBuffer):
                 batch, weights, tree_idxs = buffer.sample(cfg.batch_size)
-                ret_dict = agent.update(batch, weights=weights)
-                buffer.update_priorities(tree_idxs, ret_dict['td_error'])
+                loss, td_error, Q = agent.update(batch, step, weights=weights)
 
+                buffer.update_priorities(tree_idxs, td_error.cpu().numpy())
             elif isinstance(buffer, ReplayBuffer):
                 batch = buffer.sample(cfg.batch_size)
-                ret_dict = agent.update(batch)
+                loss, td_error, Q = agent.update(batch, step)
             else:
                 raise RuntimeError("Unknown buffer")
 
-            for key in ret_dict.keys():
-                log_dict[key][-1].append(ret_dict[key])
+            log_dict['Qs'][-1].append(Q)
+            log_dict['losses'][-1].append(loss)
 
         if step % cfg.eval_interval == 0:
             eval_mean, eval_std = eval(eval_env, agent=agent, episodes=cfg.eval_episodes, seed=seed)
@@ -60,19 +67,19 @@ def train(cfg, env, agent, buffer, seed, log_dict):
             logger.info(f"Seed: {seed}, Step: {step}, Eval mean: {eval_mean}, Eval std: {eval_std}")
             if eval_mean > best_reward:
                 best_reward = eval_mean
-                agent.save(f'best_model_seed_{seed}')
+                agent.save(f'best_model_seed_{seed}.pt')
 
         if step % cfg.plot_interval == 0:
             visualize(step, f'{agent} with {buffer}', log_dict)
 
-    agent.save(f'final_model_seed_{seed}')
+    agent.save(f'final_model_seed_{seed}.pt')
     visualize(step, f'{agent} with {buffer}', log_dict)
 
-    env = RecordVideo(eval_env, f'final_videos_seed_{seed}', name_prefix='eval', episode_trigger=lambda x: x % 3 == 0 and x < cfg.eval_episodes, disable_logger=True)
+    env = RecordVideo(eval_env, f'final_videos_seed_{seed}', name_prefix='eval', episode_trigger=lambda x: x % 3 == 0 and x < cfg.eval_episodes)
     eval_mean, eval_std = eval(env, agent=agent, episodes=cfg.eval_episodes, seed=seed)
 
-    agent.load(f'best_model_seed_{seed}')  # use best model for visualization
-    env = RecordVideo(eval_env, f'best_videos_seed_{seed}', name_prefix='eval', episode_trigger=lambda x: x % 3 == 0 and x < cfg.eval_episodes, disable_logger=True)
+    agent.load(name=f'best_model_seed_{seed}.pt')  # use best model for visualization
+    env = RecordVideo(eval_env, f'best_videos_seed_{seed}', name_prefix='eval', episode_trigger=lambda x: x % 3 == 0 and x < cfg.eval_episodes)
     eval_mean, eval_std = eval(env, agent=agent, episodes=cfg.eval_episodes, seed=seed)
     merge_videos(f'final_videos_seed_{seed}')
     merge_videos(f'best_videos_seed_{seed}')

@@ -24,56 +24,30 @@ def config_logging(log_file="main.log"):
     logging.basicConfig(level=logging.INFO, handlers=[stdout_handler, file_handler])
 
 
-def get_log_dict(agent_name, manager=None, num_seeds=0):
-    log_keys = ['critic_loss', 'actor_loss', 'td_error', 'eval_steps', 'eval_returns', 'train_steps', 'train_returns']
-    if 'td3' in agent_name:
-        log_keys.append('critic_loss_2')
-    if 'sac' in agent_name:
-        log_keys.append('alpha')
-        log_keys.append('critic_loss_2')
-    if manager is None:
-        return {key: [] for key in log_keys}
-    else:
-        return manager.dict({key: manager.list([[]] * num_seeds) for key in log_keys})
-
-
 def visualize(step, title, log_dict):
-    train_window, loss_window = 10, 200
+    train_window, loss_window, q_window = 10, 100, 100
     plt.figure(figsize=(20, 6))
 
     # plot train and eval returns
     plt.subplot(1, 3, 1)
     plt.title('frame %s. score: %s' % (step, np.mean(log_dict['train_returns'][-1][-train_window:])))
-    if min([len(log_dict['train_steps'][i]) for i in range(len(log_dict['train_steps']))]) > train_window - 1:
-        plot_scores(log_dict['train_returns'], log_dict['train_steps'], train_window, label='train')
+    plot_scores(log_dict['train_returns'], log_dict['train_steps'], train_window, label='train')
     if min([len(log_dict['eval_steps'][i]) for i in range(len(log_dict['eval_steps']))]) > 0:
-        plot_scores(log_dict['eval_returns'], log_dict['eval_steps'], window=1, label='eval', color='C1')
+        plot_scores(log_dict['eval_returns'], log_dict['eval_steps'], window=1, label='eval')
     plt.legend()
-    plt.ylabel('scores')
     plt.xlabel('step')
 
     # plot td losses
     plt.subplot(1, 3, 2)
-    plt.title('critic metrics')
-    if 'critic_loss_2' in log_dict.keys():
-        plot_scores(log_dict['critic_loss_2'], window=loss_window, label='critic_loss_2', color='C1')
-    plot_scores(log_dict['critic_loss'], window=loss_window, label='critic_loss', color='C0')
+    plt.title('loss')
+    plot_scores(log_dict['losses'], window=loss_window, label='loss')
     plt.xlabel('step')
-    plt.ylabel('critic loss')
-    plt.legend()
     plt.subplot(1, 3, 3)
 
-    # plot actor metrics
-    lines = []
-    plt.title('actor metrics')
-    lines.append(plot_scores(log_dict['actor_loss'], window=loss_window, label='actor_loss'))
+    # plot q values
+    plt.title('q_values')
+    plot_scores(log_dict['Qs'], window=q_window, label='q_values')
     plt.xlabel('step')
-    plt.ylabel('actor_loss')
-    if 'alpha' in log_dict.keys():
-        plt.twinx()  # instantiate a second axes that shares the same x-axis
-        lines.append(plot_scores(log_dict['alpha'], window=loss_window, label='alpha', color='C1'))
-        plt.ylabel('alpha')
-    plt.legend(lines, [line.get_label() for line in lines])
     plt.suptitle(title, fontsize=16)
     plt.savefig('results.png')
     plt.close()
@@ -86,6 +60,20 @@ def moving_average(a, n):
     ret[n:] = ret[n:] - ret[:-n]
     return (ret[n - 1:] / n).tolist()
 
+def get_epsilon(step, eps_min, eps_max, eps_steps, warmup_steps):
+    """
+    Return the linearly descending epsilon of the current step for the epsilon-greedy policy. 
+    The value of epsilon will keep at eps_max before warmup_steps, and after eps_steps, it will keep at eps_min.
+    """
+    ############################
+    # YOUR IMPLEMENTATION HERE #
+    if step < warmup_steps:
+        return eps_max
+    elif step >= eps_steps:
+        return eps_min
+    else:
+        return eps_max - (eps_max - eps_min) * (step - warmup_steps) / (eps_steps - warmup_steps)
+    ############################
 
 def pad_and_get_mask(lists):
     """
@@ -93,55 +81,37 @@ def pad_and_get_mask(lists):
     """
     lens = [len(l) for l in lists]
     max_len = max(lens)
-    arr = np.zeros((len(lists), max_len), float)
+    arr = np.zeros((len(lists), max_len), int)
     mask = np.arange(max_len) < np.array(lens)[:, None]
     arr[mask] = np.concatenate(lists)
     return np.ma.array(arr, mask=~mask)
 
-
-def get_schedule(schedule: str):
-    schedule_type = schedule.split('(')[0]
-    schedule_args = schedule.split('(')[1].split(')')[0].split(',')
-    if schedule_type == 'constant':
-        assert len(schedule_args) == 1
-        return lambda x: float(schedule_args[0])
-    elif schedule_type == 'linear':
-        assert len(schedule_args) == 4
-        eps_max, eps_min, init_steps, anneal_steps = float(schedule_args[0]), float(schedule_args[1]), int(schedule_args[2]), int(schedule_args[3])
-        return lambda x: np.clip(eps_max - (eps_max - eps_min) * (x - init_steps) / anneal_steps, eps_min, eps_max)
-    elif schedule_type == 'cosine':
-        assert len(schedule_args) == 4
-        eps_max, eps_min, init_steps, anneal_steps = float(schedule_args[0]), float(schedule_args[1]), int(schedule_args[2]), int(schedule_args[3])
-        return lambda x: eps_min + (eps_max - eps_min) * 0.5 * (1 + np.cos(np.clip((x - init_steps) / anneal_steps, 0, 1) * np.pi))
-    else:
-        raise ValueError('Unknown schedule: %s' % schedule_type)
+# interpolate for different length lists
 
 
-def plot_scores(scores, steps=None, window=100, label=None, color=None):
+def plot_scores(scores, steps=None, window=100, label=None):
     avg_scores = [moving_average(score, window) for score in scores]
     if steps is not None:
         for i in range(len(scores)):
-            avg_scores[i] = np.interp(np.arange(steps[i][-1]), [0] + steps[i][-len(avg_scores[i]):], [0.0] + avg_scores[i])
+            avg_scores[i] = np.interp(np.arange(steps[i][-1]), [0] + steps[i][window - 1:], [0.0] + avg_scores[i])
     if len(scores) > 1:
         avg_scores = pad_and_get_mask(avg_scores)
         scores = avg_scores.mean(axis=0)
         scores_l = avg_scores.mean(axis=0) - avg_scores.std(axis=0)
         scores_h = avg_scores.mean(axis=0) + avg_scores.std(axis=0)
         idx = list(range(len(scores)))
-        plt.fill_between(idx, scores_l, scores_h, where=scores_h > scores_l, interpolate=True, alpha=0.25, color=color)
+        plt.fill_between(idx, scores_l, scores_h, where=scores_h > scores_l, interpolate=True, alpha=0.25)
     else:
         scores = avg_scores[0]
-    plot, = plt.plot(scores, label=label, color=color)
-    return plot
+    plt.plot(scores, label=label)
 
 
 def merge_videos(video_dir):
     videos = glob.glob(os.path.join(video_dir, "*.mp4"))
     videos = sorted(videos, key=lambda x: int(x.split("-")[-1].split(".")[0]))
-    videos = [VideoFileClip(video) for video in videos]
-    clip = concatenate_videoclips([video for video in videos if video.duration > 0])
+    clip = concatenate_videoclips([VideoFileClip(video) for video in videos])
     os.makedirs('videos', exist_ok=True)
-    clip.write_videofile(os.path.join('videos', f"{video_dir}.mp4"), verbose=False, logger=None)
+    clip.write_videofile(os.path.join('videos', f"{video_dir}.mp4"))
     shutil.rmtree(video_dir)
 
 

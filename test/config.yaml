@@ -1,15 +1,17 @@
 seeds: 
+- 0
+- 1
+- 2
+- 42
 - 3407 # https://arxiv.org/abs/2109.08203
 env_name: CartPole-v1
-vec_envs: 4
 
 train:
-  nstep: ${buffer.nstep}
+  nstep: 1
   timesteps: 50_000
   batch_size: 128 
   test_every: 2500
   eps_max: 1
-  vec_envs: ${vec_envs}
   eps_min: 0.05
   eps_steps: 12_500
   warmup_steps: 0
@@ -21,7 +23,7 @@ agent:
   gamma: 0.99
   lr: 0.002
   tau: 0.1
-  nstep: ${buffer.nstep}
+  nstep: 1
   target_update_interval: 3
   hidden_size: 64
   activation: 
@@ -36,7 +38,7 @@ buffer:
   capacity: 50_000
   use_per: False
   nstep: 1
-  gamma: ${agent.gamma}
+  gamma: 0.99
   per_alpha: 0.7
   per_beta: 0.4
   per_eps: 0.01
