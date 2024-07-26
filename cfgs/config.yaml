@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - agent: ppo
+  - agent: sac
 
 seeds: 
 - 0
@@ -9,29 +9,25 @@ seeds:
 
 tag: null
 env_name: LunarLanderContinuous-v2
-vec_envs: 16
+vec_envs: 1
 
 train:
   nstep: ${buffer.nstep}
   vec_envs: ${vec_envs}
-  timesteps: 3_000_000
-  batch_size: 512
-  plot_interval: 20000
-  eval_interval: 20000
-  eval_episodes: 10
-  ppo_update_interval: ${buffer.capacity}
+  timesteps: 200_000
+  batch_size: 128
+  plot_interval: 5000
+  eval_interval: 5000
+  eval_episodes: 5
 
 buffer:
-  capacity: 16384
+  capacity: 200_000
   use_per: False
-  use_ppo: True
   nstep: 1
   gamma: ${agent.gamma}
   per_alpha: 0.7
   per_beta: 0.4
   per_eps: 0.01
-  gae_lambda: 0.95
-  vec_envs: ${vec_envs}
 
 
 hydra:

@@ -3,7 +3,7 @@ import hydra
 import torch
 import logging
 from utils import config_logging, get_log_dict
-from core import train
+from core_mp import train
 import torch.multiprocessing as mp
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 logger = logging.getLogger(__name__)

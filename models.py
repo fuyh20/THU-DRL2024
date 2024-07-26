@@ -1,18 +1,28 @@
 import torch
 import torch.nn as nn
-from utils import mlp
-from torch.distributions import Normal
+from torch import Tensor
+from torch.distributions.transforms import TanhTransform
+from torch.distributions import Normal, TransformedDistribution
 
+from typing import Optional
+from jaxtyping import Float, jaxtyped
+from beartype import beartype
+
+def mlp(input_size, layer_sizes, output_size, output_activation=nn.Identity, activation=nn.ELU):
+    sizes = [input_size] + list(layer_sizes) + [output_size]
+    layers = []
+    for i in range(len(sizes) - 1):
+        act = activation if i < len(sizes) - 2 else output_activation
+        layers += [nn.Linear(sizes[i], sizes[i + 1]), act()]
+    return nn.Sequential(*layers)
 
 class Actor(nn.Module):
-    def __init__(self, num_states, num_actions, action_space, hidden_dims = [400, 300],
-                 output_activation=nn.Tanh, activation=nn.ELU, actor_dropout=0.0):
+    def __init__(self, num_states, num_actions, action_space, hidden_dims = [400, 300], output_activation=nn.Tanh):
         super(Actor, self).__init__()
         self.action_space = action_space
         self.action_space.low = torch.as_tensor(self.action_space.low, dtype=torch.float32)
         self.action_space.high = torch.as_tensor(self.action_space.high, dtype=torch.float32)
-        self.fcs = mlp(num_states, hidden_dims, num_actions, output_activation=output_activation,
-                       activation=activation, dropout_ratio=actor_dropout)
+        self.fcs = mlp(num_states, hidden_dims, num_actions, output_activation=output_activation)
     
     def _normalize(self, action):
         return (action + 1) * (self.action_space.high - self.action_space.low) / 2 + self.action_space.low
@@ -28,75 +38,58 @@ class Actor(nn.Module):
 
 
 class SoftActor(Actor):
-    def __init__(self, num_states, num_actions, hidden_size, action_space, log_std_min, log_std_max, activation=nn.ELU, actor_dropout=0.0):
-        super().__init__(num_states, num_actions * 2, action_space, hidden_dims=hidden_size, output_activation=nn.Identity, activation=activation, actor_dropout=actor_dropout)
+    def __init__(self, num_states, num_actions, hidden_size, action_space, log_std_min, log_std_max):
+        super().__init__(num_states, num_actions * 2, action_space, hidden_dims=hidden_size, output_activation=nn.Identity)
 
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
 
-    def forward(self, state):
-        mean, log_std = self.fcs(state).chunk(2, dim=-1)
+    @jaxtyped(typechecker=beartype)
+    def forward(self, 
+            state: Float[Tensor, "*batch_size state_dim"]
+        ) -> tuple[Float[Tensor, "*batch_size action_dim"], Float[Tensor, "*batch_size action_dim"]]:
+        """
+        Obtain mean and log(std) from the fully-connected network.
+        Crop the value of log_std to the specified range.
+        """
+
+        ############################
+        # YOUR IMPLEMENTATION HERE #)
+        mean_log_std = self.fcs(state)
+        mean, log_std = torch.chunk(mean_log_std, 2, dim=-1)
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
+        ############################
         return mean, log_std
 
-    def evaluate(self, state, sample=True):
+    @jaxtyped(typechecker=beartype)
+    def evaluate(self, 
+            state: Float[Tensor, "*batch_size state_dim"],
+            sample: bool = True
+        ) -> tuple[Float[Tensor, "*batch_size action_dim"], Optional[Float[Tensor, "*batch_size"]]]:
+        
         mean, log_std = self.forward(state)
         if not sample:
             return self._normalize(torch.tanh(mean)), None
-        std = log_std.exp()
-        # dist = TransformedDistribution(Normal(mean, std), TanhTransform(cache_size=1))
-        dist = Normal(mean, std)
-        action = dist.rsample()
-        log_prob = (dist.log_prob(action) - torch.log(1. - torch.tanh(action).pow(2) + 1e-6)).sum(dim=-1)
-        # TODO: some minus np.log(action_scale) here, why?
+        
+        # sample action from N(mean, std) if sample is True
+        # obtain log_prob for policy and Q function update
+        # Hint: remember the reparameterization trick, and perform tanh normalization
+        # This library might be helpful: torch.distributions
+        ############################
+        # YOUR IMPLEMENTATION HERE #
+        normal = Normal(mean, log_std.exp())
+        action = normal.rsample()
+        log_prob = normal.log_prob(action)
+        log_prob -= torch.log(1 - torch.tanh(action).pow(2) + 1e-6)
+        log_prob = log_prob.sum(-1)
+        ############################
         return self._normalize(torch.tanh(action)), log_prob
 
 
-class PPOActor(Actor):
-    def __init__(self, num_states, num_actions, hidden_size, action_space, activation=nn.ELU,
-                 actor_dropout=0):
-        super().__init__(num_states, num_actions, action_space, hidden_size, activation=activation,
-                         output_activation=nn.Identity, actor_dropout=actor_dropout)
-
-        self.log_std = nn.Parameter(torch.zeros(1, num_actions))
-
-    def evaluate_actions(self, state, action):
-        mean = self.fcs(state)
-        std = self.log_std.exp().expand_as(mean)
-        dist = Normal(mean, std)
-        log_prob = dist.log_prob(action).sum(dim=-1)
-        entropy = dist.entropy().sum(dim=-1)
-        return log_prob, entropy
-
-    
-    def forward(self, state, sample=True):
-        "return action, log_prob, entropy"
-        mean = self.fcs(state)
-        if not sample:
-            return mean, None
-        std = self.log_std.exp().expand_as(mean)
-        dist = Normal(mean, std)
-        action = dist.sample()
-        log_prob = dist.log_prob(action).sum(dim=-1)
-        return action, log_prob
-
-
 class Critic(nn.Module):
-    def __init__(self, num_states, num_actions, hidden_dims, output_activation=nn.Identity,
-                 activation=nn.ELU, critic_dropout=0.0):
+    def __init__(self, num_states, num_actions, hidden_dims):
         super().__init__()
-        self.fcs = mlp(num_states + num_actions, hidden_dims, 1,
-                       output_activation=output_activation,
-                       activation=activation, dropout_ratio=critic_dropout)
+        self.fcs = mlp(num_states + num_actions, hidden_dims, 1)
 
     def forward(self, state, action):
         return self.fcs(torch.cat([state, action], dim=1)).squeeze()
-
-
-class ValueNet(Critic):
-    def __init__(self, num_states, hidden_dims, activation=nn.ELU, critic_dropout=0.0):
-        super().__init__(num_states, 0, hidden_dims, output_activation=nn.Identity,
-                         activation=activation, critic_dropout=critic_dropout)
-
-    def forward(self, state):
-        return self.fcs(state).squeeze()

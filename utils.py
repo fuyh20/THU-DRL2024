@@ -6,7 +6,6 @@ import shutil
 import random
 import logging
 import numpy as np
-import torch.nn as nn
 import gymnasium as gym
 import matplotlib.pyplot as plt
 from gymnasium.spaces import MultiDiscrete, Discrete, Box
@@ -26,42 +25,16 @@ def config_logging(log_file="main.log"):
 
 
 def get_log_dict(agent_name, manager=None, num_seeds=0):
-    log_keys = ['critic_loss', 'actor_loss', 'td_error', 'eval_steps',
-                'eval_returns', 'train_steps', 'train_returns']
+    log_keys = ['critic_loss', 'actor_loss', 'td_error', 'eval_steps', 'eval_returns', 'train_steps', 'train_returns']
     if 'td3' in agent_name:
         log_keys.append('critic_loss_2')
     if 'sac' in agent_name:
         log_keys.append('alpha')
         log_keys.append('critic_loss_2')
-    if 'ppo' in agent_name:
-        log_keys.append('entropy_loss')
-        log_keys.append('value_loss')
-        log_keys.append('policy_loss')
-        log_keys.remove('critic_loss')
-        log_keys.remove('actor_loss')
-        log_keys.remove('td_error')
     if manager is None:
         return {key: [] for key in log_keys}
     else:
         return manager.dict({key: manager.list([[]] * num_seeds) for key in log_keys})
-
-
-def write_to_dict(log_dict, key, value, using_mp):
-    if using_mp:
-        log_dict[key].append(value)
-    else:
-        log_dict[key][-1].append(value)
-
-
-def sync_and_visualize(log_dict, local_log_dict, barrier, idx, step, repr, using_mp):
-    if using_mp:
-        for key in local_log_dict.keys():
-            log_dict[key][idx] = local_log_dict[key]
-        barrier.wait()
-        if idx == 0:
-            visualize(step, repr, log_dict)
-    else:
-        visualize(step, repr, log_dict)
 
 
 def visualize(step, title, log_dict):
@@ -84,10 +57,7 @@ def visualize(step, title, log_dict):
     plt.title('critic metrics')
     if 'critic_loss_2' in log_dict.keys():
         plot_scores(log_dict['critic_loss_2'], window=loss_window, label='critic_loss_2', color='C1')
-    if 'critic_loss' in log_dict.keys():
-        plot_scores(log_dict['critic_loss'], window=loss_window, label='critic_loss', color='C0')
-    else:
-        plot_scores(log_dict['value_loss'], window=loss_window, label='value_loss', color='C0')
+    plot_scores(log_dict['critic_loss'], window=loss_window, label='critic_loss', color='C0')
     plt.xlabel('step')
     plt.ylabel('critic loss')
     plt.legend()
@@ -96,10 +66,7 @@ def visualize(step, title, log_dict):
     # plot actor metrics
     lines = []
     plt.title('actor metrics')
-    if 'policy_loss' in log_dict.keys():
-        lines.append(plot_scores(log_dict['policy_loss'], window=loss_window, label='policy_loss'))
-    else:
-        lines.append(plot_scores(log_dict['actor_loss'], window=loss_window, label='actor_loss'))
+    lines.append(plot_scores(log_dict['actor_loss'], window=loss_window, label='actor_loss'))
     plt.xlabel('step')
     plt.ylabel('actor_loss')
     if 'alpha' in log_dict.keys():
@@ -199,15 +166,3 @@ def get_space_shape(space, is_vector_env=False):
             return space_shape  # image observation
     else:
         raise ValueError(f"Space not supported: {space}")
-
-
-def mlp(input_size, layer_sizes, output_size, output_activation=nn.Identity, activation=nn.ELU, dropout_ratio=0.0):
-    sizes = [input_size] + list(layer_sizes) + [output_size]
-    layers = []
-    for i in range(len(sizes) - 1):
-        act = activation if i < len(sizes) - 2 else output_activation
-        if dropout_ratio > 0:
-            layers += [nn.Linear(sizes[i], sizes[i + 1]), nn.Dropout(dropout_ratio), nn.LayerNorm(), act()]
-        else:
-            layers += [nn.Linear(sizes[i], sizes[i + 1]), act()]
-    return nn.Sequential(*layers)
