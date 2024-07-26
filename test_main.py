@@ -1,146 +1,143 @@
 import json
-import torch
 import numpy as np
-from agent import DQNAgent
-from omegaconf import OmegaConf
-from dotmap import DotMap
+from dp import value_iteration, policy_iteration
+from td import epsilon_greedy_policy, Q_learning_step, Sarsa_step
 
 def load_json(filename):
     with open(filename, 'r') as f:
         return json.load(f)
 
-def run_test(test_function, points='5 pts'):
-    test_name = test_function.__name__
-    try:
-        test_function()
-        test_results = [test_name, 'Passed', points]
-    except Exception as e:
-        test_results = [test_name, 'Failed', points]
-        print(f'{test_name} failed: {e}\n')
-    
-    return test_results
-
-def test_get_Q():
-    test_cases = 4
-    cfg = DotMap(OmegaConf.load('test/config.yaml'))
-    agent = DQNAgent(state_size=4, action_size=2, cfg=cfg.agent, device='cpu', compile=False)
-    
-    agent.q_net.load_state_dict(torch.load('test/q_net.pt'))
-    agent.target_net.load_state_dict(torch.load('test/target_net.pt'))
-
-    for k in range(1, test_cases + 1):
-        test_filename = f'test/test_cases/get_Q/{k}.json'
-        print(f'Testing {test_filename}...')
+def test_value_iteration():
+    m = 4
+    for k in range(1, m + 1):
+        input_filename = f'test/test_cases/dp/value_iteration/{k}.in'
+        output_filename = f'test/test_cases/dp/value_iteration/{k}.out'
+        print(f'Testing {input_filename}...')
         
-        test_json = load_json(test_filename)
-        input_data, expected_output = test_json['in'], test_json['out']
-        state, action = torch.tensor(input_data['state']), torch.tensor(input_data['action'])
-        out = agent.get_Q(state, action).squeeze()
-        expected_output = torch.tensor(expected_output)
-        assert torch.allclose(out, expected_output), f'Q value does not match for {test_filename}'
-
-    print(f'test_get_Q passed! [10 pts]\n')
-
-def test_get_Q_target():
-    test_cases = 4
-    cfg = DotMap(OmegaConf.load('test/config.yaml'))
-    agent = DQNAgent(state_size=4, action_size=2, cfg=cfg.agent, device='cpu', compile=False)
-    
-    agent.q_net.load_state_dict(torch.load('test/q_net.pt'))
-    agent.target_net.load_state_dict(torch.load('test/target_net.pt'))
-
-    for k in range(1, test_cases + 1):
-        test_filename = f'test/test_cases/get_Q_target/{k}.json'
-        print(f'Testing {test_filename}...')
+        input_data = load_json(input_filename)
+        P_json, nS, nA = input_data['P'], input_data['nS'], input_data['nA']
         
-        test_json = load_json(test_filename)
-        input_data, expected_output = test_json['in'], test_json['out']
-        reward, done, next_state = torch.tensor(input_data['reward']), torch.tensor(input_data['done']), torch.tensor(input_data['next_state'])
-        out = agent.get_Q_target(reward, done, next_state)
-        expected_output = torch.tensor(expected_output)
+        nP = max([len(P_json[s][a]) for s in P_json for a in P_json[s]])
+        P = [[[[0 for _ in range(4)] for _ in range(nP)] for _ in range(nA)] for _ in range(nS)]
+
+        for s in P_json:
+            for a in P_json[s]:
+                for i, transition in enumerate(P_json[s][a]):
+                    terminal = True if transition[3] else False
+                    P[int(s)][int(a)][i] = [transition[0], transition[1], transition[2], terminal]
         
-        assert torch.allclose(out, expected_output), f'Q target value does not match for {test_filename}'
-
-    print(f'test_get_Q_target passed! [5 pts]\n')
-
-def test_get_double_Q_target():
-    test_cases = 4
-    cfg = DotMap(OmegaConf.load('test/config.yaml'))
-    cfg.agent.use_double=True
-    agent = DQNAgent(state_size=4, action_size=2, cfg=cfg.agent, device='cpu', compile=False)
-    
-    agent.q_net.load_state_dict(torch.load('test/q_net.pt'))
-    agent.target_net.load_state_dict(torch.load('test/target_net.pt'))
-
-    for k in range(1, test_cases + 1):
-        test_filename = f'test/test_cases/get_double_Q_target/{k}.json'
-        print(f'Testing {test_filename}...')
+        gamma, eps = input_data['gamma'], input_data['eps']
         
-        test_json = load_json(test_filename)
-        input_data, expected_output = test_json['in'], test_json['out']
-        reward, done, next_state = torch.tensor(input_data['reward']), torch.tensor(input_data['done']), torch.tensor(input_data['next_state'])
-        out = agent.get_Q_target(reward, done, next_state)
-        expected_output = torch.tensor(expected_output)
+        value_function, policy = value_iteration(P, nS, nA, gamma, eps)
         
-        assert torch.allclose(out, expected_output), 'Double Q target value does not match for {test_filename}'
-
-    print(f'test_get_double_Q_target passed! [5 pts]\n')
-     
-def test_get_action():
-    test_cases = 4
-    cfg = DotMap(OmegaConf.load('test/config.yaml'))
-    agent = DQNAgent(state_size=4, action_size=2, cfg=cfg.agent, device='cpu', compile=False)
-    
-    agent.q_net.load_state_dict(torch.load('test/q_net.pt'))
-    agent.target_net.load_state_dict(torch.load('test/target_net.pt'))
-
-    for k in range(1, test_cases + 1):
-        test_filename = f'test/test_cases/get_action/{k}.json'
-        print(f'Testing {test_filename}...')
+        expected_output = load_json(output_filename)
+        expected_value_function = np.array(expected_output['value_function'])
+        expected_policy = np.array(expected_output['policy'])
         
-        test_json = load_json(test_filename)
-        input_data, expected_output = test_json['in'], test_json['out']
-        state = np.array(input_data)
-        out = agent.get_action(state)
-        expected_output = np.array(expected_output)
+        assert np.allclose(value_function, expected_value_function, atol=0.005), f'Value function does not match for {input_filename}'
+       
+        print(f'Test {k} passed!')
+
+def test_policy_iteration():
+    m = 4
+    for k in range(1, m + 1):
+        input_filename = f'test/test_cases/dp/policy_iteration/{k}.in'
+        output_filename = f'test/test_cases/dp/policy_iteration/{k}.out'
+        print(f'Testing {input_filename}...')
         
-        assert np.allclose(out, expected_output), f'Action does not match for {test_filename}'
-
-    print(f'test_get_action passed! [5 pts]\n')
-
-def test_dueling_forward():
-    test_cases = 4
-    cfg = DotMap(OmegaConf.load('test/config.yaml'))
-    cfg.agent.use_dueling = True
-    agent = DQNAgent(state_size=4, action_size=2, cfg=cfg.agent, device='cpu', compile=False)
-    
-    agent.q_net.load_state_dict(torch.load('test/dueling_q_net.pt'))
-
-    for k in range(1, test_cases + 1):
-        test_filename = f'test/test_cases/dueling_Q_forward/{k}.json'
-        print(f'Testing {test_filename}...')
+        input_data = load_json(input_filename)
+        P_json, nS, nA = input_data['P'], input_data['nS'], input_data['nA']
         
-        test_json = load_json(test_filename)
-        input_data, expected_output = test_json['in'], test_json['out']
-        state = torch.tensor(input_data)
-        out = agent.q_net(state)
-        expected_output = torch.tensor(expected_output)
+        nP = max([len(P_json[s][a]) for s in P_json for a in P_json[s]])
+        P = [[[[0 for _ in range(4)] for _ in range(nP)] for _ in range(nA)] for _ in range(nS)]
+
+        for s in P_json:
+            for a in P_json[s]:
+                for i, transition in enumerate(P_json[s][a]):
+                    terminal = True if transition[3] else False
+                    P[int(s)][int(a)][i] = [transition[0], transition[1], transition[2], terminal]
         
-        assert torch.allclose(out, expected_output), f'Q value does not match for {test_filename}'
+        gamma, eps = input_data['gamma'], input_data['eps']
+        
+        value_function, policy = policy_iteration(P, nS, nA, gamma, eps)
+        
+        expected_output = load_json(output_filename)
+        expected_value_function = np.array(expected_output['value_function'])
+        expected_policy = np.array(expected_output['policy'])
+        
+        assert np.allclose(value_function, expected_value_function, atol=0.005), f'Value function does not match for {input_filename}'
+       
+        print(f'Test {k} passed!')
 
-    print(f'test_dueling_forward passed! [5 pts]\n')
 
-if __name__ == '__main__':
-    results = []
-    from tabulate import tabulate, SEPARATING_LINE
-    results.append(run_test(test_get_Q, points='10 pts'))
-    results.append(run_test(test_get_Q_target))
-    results.append(run_test(test_get_double_Q_target))
-    results.append(run_test(test_get_action))
-    results.append(run_test(test_dueling_forward))
-    results.append([SEPARATING_LINE, SEPARATING_LINE, SEPARATING_LINE])
-    total_score = sum([int(r[-1].split(' ')[0]) for r in results if r[1] == 'Passed'])
-    passed = sum([1 for r in results if r[1] == 'Passed'])
-    results.append(['Total', f'{passed}/5', f'{total_score} pts'])
+def test_epsilon_greedy_policy():
+    m = 10
+    for k in range(1, m + 1):
+        input_filename = f'test/test_cases/td/epsilon_greedy_policy/{k}.in'
+        output_filename = f'test/test_cases/td/epsilon_greedy_policy/{k}.out'
+        print(f'Testing {input_filename}...')
 
-    print(tabulate(results, headers=["Test Name", "Result", "Score"]))
+        input_data = load_json(input_filename)
+        nS, nA = input_data['nS'], input_data['nA']
+        Q_function = np.array(input_data['Q_function'])
+        eps = input_data['eps']
+        
+        policy = epsilon_greedy_policy(nS, nA, Q_function, eps)
+        
+        expected_output = load_json(output_filename)
+        expected_policy = np.array(expected_output['policy'])
+        
+        assert np.allclose(policy, expected_policy, atol=0.005), f'Policy does not match for {input_filename}'
+        
+        print(f'Test {k} passed!')
+        
+def test_Q_learning():
+    m = 10
+    for k in range(1, m + 1):
+        input_filename = f'test/test_cases/td/Q_learning/{k}.in'
+        output_filename = f'test/test_cases/td/Q_learning/{k}.out'
+        print(f'Testing {input_filename}...')
+
+        input_data = load_json(input_filename)
+        Q_function = np.array(input_data['Q_function'])
+        state = input_data['state']
+        action = input_data['action']
+        next_state = input_data['next_state']
+        next_action = input_data['next_action']
+        reward = input_data['reward']
+        terminal = input_data['terminal']
+        alpha = input_data['alpha']
+        gamma = input_data['gamma']
+        next_Q_function = Q_learning_step(Q_function, state, action, reward, next_state, next_action, terminal, alpha, gamma)
+        expected_output = load_json(output_filename)
+        expected_next_Q_function = np.array(expected_output['next_Q_function'])
+        
+        assert np.allclose(next_Q_function, expected_next_Q_function, atol=0.005), f'Q function does not match for {input_filename}'
+        
+        print(f'Test {k} passed!')
+        
+def test_Sarsa():
+    m = 10
+    for k in range(1, m + 1):
+        input_filename = f'test/test_cases/td/Sarsa/{k}.in'
+        output_filename = f'test/test_cases/td/Sarsa/{k}.out'
+        print(f'Testing {input_filename}...')
+
+        input_data = load_json(input_filename)
+        Q_function = np.array(input_data['Q_function'])
+        state = input_data['state']
+        action = input_data['action']
+        next_state = input_data['next_state']
+        next_action = input_data['next_action']
+        reward = input_data['reward']
+        terminal = input_data['terminal']
+        alpha = input_data['alpha']
+        gamma = input_data['gamma']
+        next_Q_function = Sarsa_step(Q_function, state, action, reward, next_state, next_action, terminal, alpha, gamma)
+        expected_output = load_json(output_filename)
+        expected_next_Q_function = np.array(expected_output['next_Q_function'])
+        
+        assert np.allclose(next_Q_function, expected_next_Q_function, atol=0.005), f'Q function does not match for {input_filename}'
+        
+        print(f'Test {k} passed!')
+        

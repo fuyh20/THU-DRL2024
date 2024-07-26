@@ -1,0 +1,1 @@
+gymnasium[toy_text]==0.29.1
